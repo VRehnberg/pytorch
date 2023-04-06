@@ -230,6 +230,63 @@ def _operator_dispatch(
             redistribute_with_schema=needs_redistribute,
         )
 
+        from torch.distributed._tensor.random import _set_offset, get_rng_state
+
+        aten = torch.ops.aten
+        random_ops = [
+            aten.native_dropout.default,
+            aten.normal_.default,
+            aten.uniform_.default,
+        ]
+        # before running local op computation, check if op is random op
+        # for random ops, adjust Philox RNG state based on DTensor Placements
+        if op_call in random_ops:
+            # compute how many shards the DTensor object is partitioned
+            # TODO: use arg_spec from input_schema_suggestion instead???
+            dtensor_arg = arg_list[0]
+            local_tensor_arg = cast(Tuple[object, ...], local_tensor_args)[0]
+            assert isinstance(dtensor_arg, dtensor.DTensor)
+            assert isinstance(local_tensor_arg, torch.Tensor)
+
+            # we assume that the dtensor is evenly sharded on all dims
+            dtensor_shape = dtensor_arg.shape
+            local_tensor_shape = local_tensor_arg.shape
+            for dim1, dim2 in zip(dtensor_shape, local_tensor_shape):
+                if dim1 % dim2 != 0:
+                    raise RuntimeError("DTensor is expected to be evenly sharded.")
+
+            # compute the topology of unique local shards:
+            # example:
+            dim_map = dtensor_arg._spec.dim_map
+            assert mesh is not None
+            shard_shape = [mesh.size(dim) if dim >= 0 else 1 for dim in dim_map]
+
+            # compute the total number of unique local shards
+            import math
+
+            num_shards = math.prod(shard_shape)
+
+            # then, compute the local shard's coordinate among the shard topology
+            coord = mesh.get_coordinate()
+            assert coord is not None
+            # TODO: add explanation
+            shard_coord = [coord[dim] if dim >= 0 else 0 for dim in dim_map]
+
+            # convert the coordinate to linear index
+            # TODO: is this order correct???
+            strides = [1]
+            for length in shard_shape[:0:-1]:
+                strides.append(strides[-1] * length)
+            strides = strides[::-1]
+            shard_idx = sum([x * y for x, y in zip(shard_coord, strides)])
+
+            # now, we can set the Philox offset to the right value based on shard_idx
+            local_size = local_tensor_arg.numel()
+            state = get_rng_state(mesh)
+            assert state is not None
+            offset = state[-8:].view(torch.int64)[0].item()
+            _set_offset(int(offset + shard_idx * local_size), mesh)
+
         # run local op computation with potentially modified args/kwargs
         local_tensor_args = cast(Tuple[object, ...], local_tensor_args)
         local_tensor_kwargs = cast(Dict[str, object], local_tensor_kwargs)
@@ -243,6 +300,14 @@ def _operator_dispatch(
             # op runs on a submesh and return type is scalar value
             obj_list = [None for _ in range(dist.get_world_size())]
             dist.all_gather_object(obj_list, local_results)
+
+        # if op is a random op, adjust Philox RNG state to maintain synchronization
+        if op_call in random_ops:
+            dtensor_arg = arg_list[0]
+            assert isinstance(dtensor_arg, dtensor.DTensor)
+            global_size = dtensor_arg.numel()
+            assert mesh is not None
+            _set_offset(int(offset + global_size), mesh)
 
     if suggested_input_schema.is_inplace:
         # inplace op should return self instead of re-wrapping
