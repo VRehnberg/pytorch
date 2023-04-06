@@ -1483,3 +1483,4 @@ def nnmodule_has_hooks(
             ]
         )
     return any(len(getattr(mod, x)) > 0 for x in hook_dicts_to_check if hasattr(mod, x))
+
