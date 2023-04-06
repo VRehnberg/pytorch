@@ -2,7 +2,6 @@
 import importlib
 import logging
 import os
-import re
 import subprocess
 import sys
 import time
@@ -68,22 +67,16 @@ BATCH_SIZE_DIVISORS = {
     "xcit_large_24_p8_224": 4,
 }
 
-REQUIRE_HIGHER_TOLERANCE = set("botnet26t_256")
+REQUIRE_HIGHER_TOLERANCE = {"botnet26t_256"}
 
-SKIP = {
-    # Unusual training setup
-    "levit_128",
-}
-
-SKIP_TRAIN = {
-    # segfault: Internal Triton PTX codegen error
-    "eca_halonext26ts",
-}
+SKIP = set()
 
 NONDETERMINISTIC = {
     # https://github.com/pytorch/pytorch/issues/94066
     "sebotnet33ts_256",
 }
+
+REQUIRE_MORE_THAN_24GB = set()
 
 MAX_BATCH_SIZE_FOR_ACCURACY_CHECK = {
     "cait_m36_384": 4,
@@ -188,6 +181,11 @@ class TimmRunnner(BenchmarkRunner):
     def __init__(self):
         super().__init__()
         self.suite_name = "timm_models"
+        self.model_names = sorted(TIMM_MODELS.keys())
+
+    @property
+    def skip_models(self):
+        return SKIP
 
     def load_model(
         self,
@@ -293,23 +291,6 @@ class TimmRunnner(BenchmarkRunner):
         self.validate_model(model, example_inputs)
 
         return device, model_name, model, example_inputs, batch_size
-
-    def iter_model_names(self, args):
-        # for model_name in list_models(pretrained=True, exclude_filters=["*in21k"]):
-        model_names = sorted(TIMM_MODELS.keys())
-        start, end = self.get_benchmark_indices(len(model_names))
-        for index, model_name in enumerate(model_names):
-            if index < start or index >= end:
-                continue
-            if (
-                not re.search("|".join(args.filter), model_name, re.I)
-                or re.search("|".join(args.exclude), model_name, re.I)
-                or model_name in args.exclude_exact
-                or model_name in self.skip_models
-            ):
-                continue
-
-            yield model_name
 
     def pick_grad(self, name, is_training):
         if is_training:
