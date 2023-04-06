@@ -133,6 +133,10 @@ from torch.testing._internal.opinfo.definitions.special import (
 from torch.testing._internal.opinfo.definitions._masked import (
     sample_inputs_softmax_variant,
 )
+from torch.testing._internal.opinfo.definitions.sparse import (
+    sample_inputs_elementwise_binary_operation_sparse,
+)
+
 
 if TEST_SCIPY:
     from scipy import stats
@@ -9246,7 +9250,19 @@ op_db: List[OpInfo] = [
                     assert_autodiffed=True,
                     supports_forward_ad=True,
                     supports_fwgrad_bwgrad=True,
-                    supports_two_python_scalars=True),
+                    supports_two_python_scalars=True,
+                    # Specifying sample input function for sparse layout implies the sparse layout support:
+                    sample_inputs_sparse_coo_func=partial(sample_inputs_elementwise_binary_operation_sparse,
+                                                          layout=torch.sparse_coo),
+                    sample_inputs_sparse_csr_func=partial(sample_inputs_elementwise_binary_operation_sparse,
+                                                          layout=torch.sparse_csr),
+                    sample_inputs_sparse_csc_func=partial(sample_inputs_elementwise_binary_operation_sparse,
+                                                          layout=torch.sparse_csc),
+                    sample_inputs_sparse_bsr_func=partial(sample_inputs_elementwise_binary_operation_sparse,
+                                                          layout=torch.sparse_bsr),
+                    sample_inputs_sparse_bsc_func=partial(sample_inputs_elementwise_binary_operation_sparse,
+                                                          layout=torch.sparse_bsc),
+                    ),
     BinaryUfuncInfo('sub',
                     # NumPy has no builtin reference for the alpha kwarg, but it is easy enough to emulate
                     ref=lambda input, other, *, alpha=1: np.subtract(input, np.multiply(alpha, other)),
@@ -9467,8 +9483,7 @@ op_db: List[OpInfo] = [
            sample_inputs_func=sample_inputs_addr,
            gradcheck_nondet_tol=GRADCHECK_NONDET_TOL),
     OpInfo('addcmul',
-           dtypes=all_types_and_complex_and(torch.bfloat16),
-           dtypesIfCUDA=all_types_and_complex_and(torch.float16, torch.bfloat16),
+           dtypes=all_types_and_complex_and(torch.float16, torch.bfloat16),
            assert_autodiffed=True,
            supports_forward_ad=True,
            supports_fwgrad_bwgrad=True,
@@ -19274,6 +19289,16 @@ python_ref_db = [
     PythonRefInfo(
         "_refs.addcmul",
         torch_opinfo_name="addcmul",
+        skips=(
+            # Reference result was farther (1.3343989849090576e-05)
+            # from the precise computation than the torch result
+            # was (9.592622518539429e-06)!
+            # FIXME: enable dtype-based tolerances in test_ops.py:TestCommon._ref_test_helper
+            DecorateInfo(unittest.skip("Skipped!"), 'TestCommon', 'test_python_ref',
+                         dtypes=(torch.float16,), device_type="cpu"),
+            DecorateInfo(unittest.skip("Skipped!"), 'TestCommon', 'test_python_ref_torch_fallback',
+                         dtypes=(torch.float16,), device_type="cpu"),
+        ),
     ),
     ElementwiseBinaryPythonRefInfo(
         "_refs.clamp_min",
