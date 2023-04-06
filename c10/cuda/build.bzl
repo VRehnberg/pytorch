@@ -1,3 +1,4 @@
+
 def define_targets(rules):
     rules.cc_library(
         name = "cuda",
@@ -34,6 +35,18 @@ def define_targets(rules):
         # This library uses registration. Don't let registered
         # entities be removed.
         alwayslink = True,
+        linkstatic = True,
+        local_defines = ["C10_BUILD_MAIN_LIB"],
+        visibility = ["//visibility:public"],
+        defines = ["USE_CUDA"],
+        deps = [
+            ":Macros",
+            "@cuda",
+            "//c10/core:base",
+            "//c10/macros:macros",
+            "//c10/util:base",
+        ],
+        copts = ["-DUSE_BAZEL"],
     )
 
     rules.cc_library(
